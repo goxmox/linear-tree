@@ -252,7 +252,7 @@ class _LinearTree(BaseEstimator):
         self.max_bins = max_bins
         self.min_score_gain = min_impurity_decrease
         self.categorical_features = categorical_features
-        self.split_features = split_features
+        self.split_features: int | Iterable[int] = split_features
         self.linear_features = linear_features
         self.n_jobs = n_jobs
 
@@ -262,7 +262,7 @@ class _LinearTree(BaseEstimator):
     def _parallel_args(self):
         return {}
 
-    def _split(self, X, Z, derivative_basis, y, bins,
+    def _split(self, X, Z, derivative_basis, y,
                support_sample_weight,
                weights=None,
                loss=None,
@@ -301,6 +301,13 @@ class _LinearTree(BaseEstimator):
         -------
         self : object
         """
+        probabilities = np.linspace(0, 1, self.max_bins)[1:-1]
+
+        bins = {
+            col: np.unique(np.quantile(X[:, col], probabilities))
+            for col in self._split_features
+        }
+
         # Parallel loops
         n_jobs, split_feat = _partition_columns(self._split_features, self.n_jobs)
 
@@ -365,13 +372,6 @@ class _LinearTree(BaseEstimator):
         n_sample, self.n_features_in_ = X.shape
         self.feature_importances_ = np.zeros((self.n_features_in_,))
 
-        # extract quantiles
-        bins = np.linspace(0, 1, self.max_bins)[1:-1]
-        bins = np.quantile(X, bins, axis=0)
-        bins = list(bins.T)
-        bins = [np.unique(X[:, c]) if c in self._categorical_features
-                else np.unique(q) for c, q in enumerate(bins)]
-
         # check if base_estimator supports fitting with sample_weights
         support_sample_weight = has_fit_parameter(self.base_estimator,
                                                   "sample_weight")
@@ -414,13 +414,13 @@ class _LinearTree(BaseEstimator):
 
             if weights is None:
                 split_t, split_col, left_node, right_node = self._split(
-                    X[mask], Z[mask], masked_derivative_basis, y[mask], bins,
+                    X[mask], Z[mask], masked_derivative_basis, y[mask],
                     support_sample_weight,
                     loss=loss, beta_parent=np.ravel(self._nodes[queue[-1]].model.coef_),
                 )
             else:
                 split_t, split_col, left_node, right_node = self._split(
-                    X[mask], Z[mask], masked_derivative_basis, y[mask], bins,
+                    X[mask], Z[mask], masked_derivative_basis, y[mask],
                     support_sample_weight, weights[mask],
                     loss=loss, beta_parent=np.ravel(self._nodes[queue[-1]].model.coef_),
                 )

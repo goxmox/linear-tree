@@ -1,3 +1,5 @@
+from typing import Iterable
+
 import numpy as np
 
 from sklearn.base import ClassifierMixin, RegressorMixin
@@ -139,7 +141,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
         self.max_bins = max_bins
         self.min_score_gain = min_score_gain
         self.categorical_features = categorical_features
-        self.split_features = split_features
+        self.split_features: int | Iterable[int] = split_features
         self.linear_features = linear_features
         self.n_jobs = n_jobs
 
