@@ -156,6 +156,7 @@ def _parallel_binning_fit(split_feat, _self,
                     multiplicity = factorial(order) / np.prod(factorial(alpha))
 
                     derivative_gain += multiplicity * (left_gap @ left_gap + right_gap @ right_gap) / X.shape[0]
+                    derivative_weight /= X.shape[0]
             else:
                 if support_sample_weight:
                     model_left.fit(Z[left], y[left],
@@ -193,6 +194,8 @@ def _parallel_binning_fit(split_feat, _self,
                     multiplicity = factorial(order) / np.prod(factorial(alpha))
 
                     derivative_gain += multiplicity * (weights[left] @ left_gap**2 + weights[right] @ right_gap**2) / weights.sum()
+
+                derivative_weight /= weights.sum()
 
             score = response_gain + derivative_weight * derivative_gain
             #print(derivative_weight * derivative_gain / score)
