@@ -94,10 +94,10 @@ def _parallel_binning_fit(split_feat, _self,
     largs_left = {'classes': None}
     largs_right = {'classes': None}
 
-    best_gain = -1
+    best_gain = -np.inf
 
     if n_sample < _self._min_samples_split:
-        return parent_loss, split_t, split_col, left_node, right_node
+        return best_gain, split_t, split_col, left_node, right_node
 
     for col, _bin in zip(split_feat, bins):
 
@@ -111,29 +111,31 @@ def _parallel_binning_fit(split_feat, _self,
             if n_left < _self._min_samples_leaf or n_right < _self._min_samples_leaf:
                 continue
 
-            # create 2D bool mask for right/left children
-            left_mesh = np.ix_(~mask, _self._linear_features)
-            right_mesh = np.ix_(mask, _self._linear_features)
+            # # create 2D bool mask for right/left children
+            # left_mesh = np.ix_(~mask, _self._linear_features)
+            # right_mesh = np.ix_(mask, _self._linear_features)
+            left = ~mask
+            right = mask
 
             model_left = deepcopy(_self.base_estimator)
             model_right = deepcopy(_self.base_estimator)
 
             if hasattr(_self, 'classes_'):
-                largs_left['classes'] = np.unique(y[~mask])
-                largs_right['classes'] = np.unique(y[mask])
+                largs_left['classes'] = np.unique(y[left])
+                largs_right['classes'] = np.unique(y[right])
                 if len(largs_left['classes']) == 1:
                     model_left = DummyClassifier(strategy="most_frequent")
                 if len(largs_right['classes']) == 1:
                     model_right = DummyClassifier(strategy="most_frequent")
 
             if weights is None:
-                model_left.fit(Z[left_mesh], y[~mask])
-                loss_left = feval_linear(model_left, Z[left_mesh], y[~mask],
+                model_left.fit(Z[left], y[left])
+                loss_left = feval_linear(model_left, Z[left], y[left],
                                   **largs_left)
                 wloss_left = loss_left * (n_left / n_sample)
 
-                model_right.fit(Z[right_mesh], y[mask])
-                loss_right = feval_linear(model_right, Z[right_mesh], y[mask],
+                model_right.fit(Z[right], y[right])
+                loss_right = feval_linear(model_right, Z[right], y[right],
                                    **largs_right)
                 wloss_right = loss_right * (n_right / n_sample)
 
@@ -147,8 +149,8 @@ def _parallel_binning_fit(split_feat, _self,
                 derivative_gain = 0.0
 
                 for alpha, D in derivative_basis.items():
-                    left_gap = D[left_mesh] @ (beta_left - beta_parent)
-                    right_gap = D[right_mesh] @ (beta_right - beta_parent)
+                    left_gap = D[left] @ (beta_left - beta_parent)
+                    right_gap = D[right] @ (beta_right - beta_parent)
 
                     order = sum(alpha)
                     multiplicity = factorial(order) / np.prod(factorial(alpha))
@@ -156,22 +158,22 @@ def _parallel_binning_fit(split_feat, _self,
                     derivative_gain += multiplicity * (left_gap @ left_gap + right_gap @ right_gap) / X.shape[0]
             else:
                 if support_sample_weight:
-                    model_left.fit(X[left_mesh], y[~mask],
+                    model_left.fit(X[left], y[~mask],
                                    sample_weight=weights[~mask])
 
-                    model_right.fit(X[right_mesh], y[mask],
+                    model_right.fit(X[right], y[mask],
                                     sample_weight=weights[mask])
 
                 else:
-                    model_left.fit(X[left_mesh], y[~mask])
+                    model_left.fit(X[left], y[~mask])
 
-                    model_right.fit(X[right_mesh], y[mask])
+                    model_right.fit(X[right], y[mask])
 
-                loss_left = feval_linear(model_left, X[left_mesh], y[~mask],
+                loss_left = feval_linear(model_left, X[left], y[~mask],
                                   weights=weights[~mask], **largs_left)
                 wloss_left = loss_left * (weights[~mask].sum() / weights.sum())
 
-                loss_right = feval_linear(model_right, X[right_mesh], y[mask],
+                loss_right = feval_linear(model_right, X[right], y[mask],
                                    weights=weights[mask], **largs_right)
                 wloss_right = loss_right * (weights[mask].sum() / weights.sum())
 
@@ -187,7 +189,7 @@ def _parallel_binning_fit(split_feat, _self,
                 right_node = (model_right, loss_right, wloss_right,
                               n_right, largs_right['classes'])
 
-    return parent_loss, split_t, split_col, left_node, right_node
+    return best_gain, split_t, split_col, left_node, right_node
 
 
 def _map_node(X, feat, direction, split):
@@ -408,7 +410,7 @@ class _LinearTree(BaseEstimator):
 
         i = 1
         while len(queue) > 0:
-            masked_derivative_basis = {key: D[mask] for key, D in derivative_basis}
+            masked_derivative_basis = {key: D[mask] for key, D in derivative_basis.items()}
 
             if weights is None:
                 split_t, split_col, left_node, right_node = self._split(
