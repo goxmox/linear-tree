@@ -1,5 +1,5 @@
 import numbers
-from typing import Iterable
+from typing import Iterable, List
 
 import numpy as np
 import scipy.sparse as sp
@@ -80,8 +80,8 @@ def _partition_columns(columns, n_jobs):
 
 
 def _parallel_binning_fit(split_feat, _self,
-                          X, Z, derivative_basis, y,
-                          weights, support_sample_weight,
+                          X, Z, derivative_basis, y,  deriv,
+                          weights,  support_sample_weight,
                           bins, parent_loss, beta_parent, derivative_weight,):
     """Private function to find the best column splittings within a job."""
     n_sample, n_feat = X.shape
@@ -149,14 +149,15 @@ def _parallel_binning_fit(split_feat, _self,
                 derivative_gain = 0.0
 
                 for alpha, D in derivative_basis.items():
-                    left_gap = D[left] @ (beta_left - beta_parent)
-                    right_gap = D[right] @ (beta_right - beta_parent)
+                    #left_gap = D[left] @ (beta_left - beta_parent)
+                    #right_gap = D[right] @ (beta_right - beta_parent)
+                    left_gap = D[left] @ beta_left - deriv[alpha][left]
+                    right_gap = D[right] @ beta_right - deriv[alpha][right]
 
                     order = sum(alpha)
-                    multiplicity = factorial(order) / np.prod(factorial(alpha))
+                    multiplicity = _self.derivative_weights[order - 1] * factorial(order) / np.prod(factorial(alpha))
 
                     derivative_gain += multiplicity * (left_gap @ left_gap + right_gap @ right_gap) / X.shape[0]
-                    derivative_weight /= X.shape[0]
             else:
                 if support_sample_weight:
                     model_left.fit(Z[left], y[left],
@@ -191,14 +192,12 @@ def _parallel_binning_fit(split_feat, _self,
                     right_gap = D[right] @ (beta_right - beta_parent)
 
                     order = sum(alpha)
-                    multiplicity = factorial(order) / np.prod(factorial(alpha))
+                    multiplicity = _self.derivative_weights[order - 1] * factorial(order) / np.prod(factorial(alpha))
 
                     derivative_gain += multiplicity * (weights[left] @ left_gap**2 + weights[right] @ right_gap**2) / weights.sum()
 
-                derivative_weight /= weights.sum()
-
-            score = response_gain + derivative_weight * derivative_gain
-            #print(derivative_weight * derivative_gain / score)
+            score = response_gain + derivative_gain
+            # print(derivative_gain / score)
 
             # store if best
             if score > best_gain:
@@ -265,7 +264,7 @@ class _LinearTree(BaseEstimator):
                  local_degree: int = 3, derivative_degree: int = 2,
                  max_features="sqrt",
                  random_state=None,
-                 derivative_weight: float = 1.0,
+                 derivative_weights: List[float] = [1e-6, 1e-7],
     ):
 
         self.base_estimator = base_estimator
@@ -284,13 +283,13 @@ class _LinearTree(BaseEstimator):
         self.derivative_degree = derivative_degree
         self.max_features = max_features
         self.random_state = random_state
-        self.derivative_weight = derivative_weight
+        self.derivative_weights = derivative_weights
 
     def _parallel_args(self):
         return {}
 
     def _split(self, X, Z, derivative_basis, y,
-               support_sample_weight,
+               support_sample_weight,  deriv,
                weights=None,
                loss=None,
                beta_parent=None,
@@ -351,10 +350,10 @@ class _LinearTree(BaseEstimator):
                                **self._parallel_args())(
             delayed(_parallel_binning_fit)(
                 feat,
-                self, X, Z, derivative_basis, y,
+                self, X, Z, derivative_basis, y,  deriv,
                 weights, support_sample_weight,
                 [bins[i] for i in feat],
-                loss, beta_parent, self.derivative_weight,
+                loss, beta_parent, self.derivative_weights,
             )
             for feat in split_feat)
 
@@ -383,7 +382,7 @@ class _LinearTree(BaseEstimator):
 
         return split_t, split_col, left_node, right_node
 
-    def _grow(self, X, Z, derivative_basis, y, weights=None):
+    def _grow(self, X, Z, derivative_basis, y, deriv, weights=None):
         """Grow and prune a Linear Tree from the training set (X, y).
 
         Parameters
@@ -446,17 +445,18 @@ class _LinearTree(BaseEstimator):
         i = 1
         while len(queue) > 0:
             masked_derivative_basis = {key: D[mask] for key, D in derivative_basis.items()}
+            masked_derivs = {alpha: d[mask] for alpha, d in deriv.items()}
 
             if weights is None:
                 split_t, split_col, left_node, right_node = self._split(
                     X[mask], Z[mask], masked_derivative_basis, y[mask],
-                    support_sample_weight,
+                    support_sample_weight, masked_derivs,
                     loss=loss, beta_parent=np.ravel(self._nodes[queue[-1]].model.coef_),
                 )
             else:
                 split_t, split_col, left_node, right_node = self._split(
                     X[mask], Z[mask], masked_derivative_basis, y[mask],
-                    support_sample_weight, weights[mask],
+                    support_sample_weight, weights[mask], masked_derivs,
                     loss=loss, beta_parent=np.ravel(self._nodes[queue[-1]].model.coef_),
                 )
 
@@ -515,7 +515,7 @@ class _LinearTree(BaseEstimator):
 
         return self
 
-    def _fit(self, X, Z, derivative_basis, y, sample_weight=None):
+    def _fit(self, X, Z, derivative_basis, y, deriv, sample_weight=None):
         """Build a Linear Tree of a linear estimator from the training
         set (X, y).
 
@@ -656,7 +656,7 @@ class _LinearTree(BaseEstimator):
             linear_features = np.setdiff1d(np.arange(n_feat), cat_features)
         self._linear_features = linear_features
 
-        self._grow(X, Z, derivative_basis, y, sample_weight)
+        self._grow(X, Z, derivative_basis, y, deriv, sample_weight)
 
         normalizer = np.sum(self.feature_importances_)
         if normalizer > 0:

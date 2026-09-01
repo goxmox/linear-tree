@@ -133,7 +133,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
                  min_score_gain=0.0, categorical_features=None,
                  split_features=None, linear_features=None, n_jobs=None,
                  local_degree: int = 3, derivative_degree: int = 2,
-                 derivative_weight: float = 1.0,
+                 derivative_weights: list[float] = [1e-6, 1e-7],
                  max_features="sqrt",
                  random_state=None,
     ):
@@ -155,7 +155,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
         self._polynomial = None
         self.max_features = max_features
         self.random_state = random_state
-        self.derivative_weight = derivative_weight
+        self.derivative_weights = derivative_weights
 
     def _derivative_transform(self, X, alpha):
         powers = self._polynomial.powers_
@@ -182,7 +182,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
 
         return derivative
 
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, deriv, sample_weight=None):
         """Build a Linear Tree of a linear estimator from the training
         set (X, y).
 
@@ -249,7 +249,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
         for alpha in alphas:
             derivative_basis[tuple(alpha)] = self._derivative_transform(X, alpha)
 
-        self._fit(X, Z, derivative_basis, y, sample_weight)
+        self._fit(X, Z, derivative_basis, y, deriv, sample_weight)
 
         return self
 
@@ -1665,6 +1665,7 @@ def _fit_sobolev_tree(
     estimator,
     X,
     y,
+    deriv,
     sample_weight,
     n_samples,
     seed,
@@ -1675,7 +1676,7 @@ def _fit_sobolev_tree(
 
     weights = None if sample_weight is None else sample_weight[rows]
 
-    return tree.fit(X[rows], y[rows], sample_weight=weights), rows
+    return tree.fit(X[rows], y[rows], {alpha: d[rows] for alpha, d in deriv.items()}, sample_weight=weights), rows
 
 
 class SobolevForestRegressor(RegressorMixin, BaseEstimator):
@@ -1694,7 +1695,7 @@ class SobolevForestRegressor(RegressorMixin, BaseEstimator):
         self.n_jobs = n_jobs
         self.random_state = random_state
 
-    def fit(self, X, y, sample_weight=None):
+    def fit(self, X, y, deriv, sample_weight=None):
         X = np.asarray(X)
         y = np.asarray(y)
 
@@ -1719,6 +1720,7 @@ class SobolevForestRegressor(RegressorMixin, BaseEstimator):
                 self.estimator,
                 X,
                 y,
+                deriv,
                 sample_weight,
                 n_samples,
                 seed,
