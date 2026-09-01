@@ -2,7 +2,7 @@ from typing import Iterable
 
 import numpy as np
 
-from sklearn.base import ClassifierMixin, RegressorMixin
+from sklearn.base import ClassifierMixin, RegressorMixin, BaseEstimator, clone
 from sklearn.utils.validation import check_is_fitted, _check_sample_weight
 
 from ._classes import _predict_branch
@@ -10,6 +10,8 @@ from ._classes import _LinearTree, _LinearBoosting, _LinearForest
 
 from scipy.special import factorial
 from sklearn.preprocessing import PolynomialFeatures
+
+from joblib import Parallel, delayed
 
 
 class LinearTreeRegressor(_LinearTree, RegressorMixin):
@@ -131,6 +133,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
                  min_score_gain=0.0, categorical_features=None,
                  split_features=None, linear_features=None, n_jobs=None,
                  local_degree: int = 3, derivative_degree: int = 2,
+                 derivative_weight: float = 1.0,
                  max_features="sqrt",
                  random_state=None,
     ):
@@ -152,6 +155,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
         self._polynomial = None
         self.max_features = max_features
         self.random_state = random_state
+        self.derivative_weight = derivative_weight
 
     def _derivative_transform(self, X, alpha):
         powers = self._polynomial.powers_
@@ -1657,3 +1661,82 @@ class LinearForestClassifier(_LinearForest, ClassifierMixin):
         return np.log(self.predict_proba(X))
 
 
+def _fit_sobolev_tree(
+    estimator,
+    X,
+    y,
+    sample_weight,
+    n_samples,
+    seed,
+):
+    rows = np.random.default_rng(seed).choice(len(X), size=n_samples, replace=False)
+
+    tree = clone(estimator).set_params(random_state=int(seed), n_jobs=1)
+
+    weights = None if sample_weight is None else sample_weight[rows]
+
+    return tree.fit(X[rows], y[rows], sample_weight=weights), rows
+
+
+class SobolevForestRegressor(RegressorMixin, BaseEstimator):
+
+    def __init__(
+        self,
+        estimator,
+        n_estimators=100,
+        max_samples=0.7,
+        n_jobs=-1,
+        random_state=None,
+    ):
+        self.estimator = estimator
+        self.n_estimators = n_estimators
+        self.max_samples = max_samples
+        self.n_jobs = n_jobs
+        self.random_state = random_state
+
+    def fit(self, X, y, sample_weight=None):
+        X = np.asarray(X)
+        y = np.asarray(y)
+
+        if sample_weight is not None:
+            sample_weight = np.asarray(sample_weight)
+
+        n_samples = (
+            int(np.ceil(self.max_samples * len(X)))
+            if isinstance(self.max_samples, float)
+            else self.max_samples
+        )
+
+        self.estimator_seeds_ = np.random.default_rng(
+            self.random_state
+        ).integers(
+            np.iinfo(np.int32).max,
+            size=self.n_estimators,
+        )
+
+        fitted = Parallel(n_jobs=self.n_jobs)(
+            delayed(_fit_sobolev_tree)(
+                self.estimator,
+                X,
+                y,
+                sample_weight,
+                n_samples,
+                seed,
+            )
+            for seed in self.estimator_seeds_
+        )
+
+        self.estimators_, self.estimators_samples_ = map(
+            list,
+            zip(*fitted),
+        )
+
+        return self
+
+    def predict(self, X, alpha=None):
+        predictions = [
+            tree.predict(X, alpha=alpha)
+            for tree in self.estimators_
+        ]
+
+        return np.mean(predictions, axis=0)

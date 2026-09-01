@@ -82,7 +82,7 @@ def _partition_columns(columns, n_jobs):
 def _parallel_binning_fit(split_feat, _self,
                           X, Z, derivative_basis, y,
                           weights, support_sample_weight,
-                          bins, parent_loss, beta_parent,):
+                          bins, parent_loss, beta_parent, derivative_weight,):
     """Private function to find the best column splittings within a job."""
     n_sample, n_feat = X.shape
     feval_linear = CRITERIA[_self.criterion]
@@ -194,7 +194,8 @@ def _parallel_binning_fit(split_feat, _self,
 
                     derivative_gain += multiplicity * (weights[left] @ left_gap**2 + weights[right] @ right_gap**2) / weights.sum()
 
-            score = response_gain + derivative_gain
+            score = response_gain + derivative_weight * derivative_gain
+            #print(derivative_weight * derivative_gain / score)
 
             # store if best
             if score > best_gain:
@@ -261,6 +262,7 @@ class _LinearTree(BaseEstimator):
                  local_degree: int = 3, derivative_degree: int = 2,
                  max_features="sqrt",
                  random_state=None,
+                 derivative_weight: float = 1.0,
     ):
 
         self.base_estimator = base_estimator
@@ -279,6 +281,7 @@ class _LinearTree(BaseEstimator):
         self.derivative_degree = derivative_degree
         self.max_features = max_features
         self.random_state = random_state
+        self.derivative_weight = derivative_weight
 
     def _parallel_args(self):
         return {}
@@ -334,11 +337,11 @@ class _LinearTree(BaseEstimator):
 
         bins = {
             col: np.unique(np.quantile(X[:, col], probabilities))
-            for col in self._split_features
+            for col in node_features
         }
 
         # Parallel loops
-        n_jobs, split_feat = _partition_columns(self._split_features, self.n_jobs)
+        n_jobs, split_feat = _partition_columns(node_features, self.n_jobs)
 
         # partition columns splittings between jobs
         all_results = Parallel(n_jobs=n_jobs, verbose=0,
@@ -348,7 +351,7 @@ class _LinearTree(BaseEstimator):
                 self, X, Z, derivative_basis, y,
                 weights, support_sample_weight,
                 [bins[i] for i in feat],
-                loss, beta_parent,
+                loss, beta_parent, self.derivative_weight,
             )
             for feat in split_feat)
 
