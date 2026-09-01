@@ -131,6 +131,8 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
                  min_score_gain=0.0, categorical_features=None,
                  split_features=None, linear_features=None, n_jobs=None,
                  local_degree: int = 3, derivative_degree: int = 2,
+                 max_features="sqrt",
+                 random_state=None,
     ):
 
         self.base_estimator = base_estimator
@@ -148,6 +150,8 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
         self.local_degree = local_degree
         self.derivative_degree = derivative_degree
         self._polynomial = None
+        self.max_features = max_features
+        self.random_state = random_state
 
     def _derivative_transform(self, X, alpha):
         powers = self._polynomial.powers_
@@ -195,6 +199,8 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
         -------
         self : object
         """
+        self._rng = np.random.default_rng(self.random_state)
+
         reg_criterions = ('mse', 'rmse', 'mae', 'poisson')
 
         if self.criterion not in reg_criterions:
@@ -1649,3 +1655,5 @@ class LinearForestClassifier(_LinearForest, ClassifierMixin):
             classes corresponds to that in the attribute :term:`classes_`.
         """
         return np.log(self.predict_proba(X))
+
+

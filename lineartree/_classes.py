@@ -158,24 +158,41 @@ def _parallel_binning_fit(split_feat, _self,
                     derivative_gain += multiplicity * (left_gap @ left_gap + right_gap @ right_gap) / X.shape[0]
             else:
                 if support_sample_weight:
-                    model_left.fit(X[left], y[~mask],
-                                   sample_weight=weights[~mask])
+                    model_left.fit(Z[left], y[left],
+                                   sample_weight=weights[left])
 
-                    model_right.fit(X[right], y[mask],
-                                    sample_weight=weights[mask])
+                    model_right.fit(Z[right], y[right],
+                                    sample_weight=weights[right])
 
                 else:
-                    model_left.fit(X[left], y[~mask])
+                    model_left.fit(Z[left], y[left])
+                    model_right.fit(Z[right], y[right])
 
-                    model_right.fit(X[right], y[mask])
+                loss_left = feval_linear(model_left, Z[left], y[left],
+                                  weights=weights[left], **largs_left)
+                wloss_left = loss_left * (weights[left].sum() / weights.sum())
 
-                loss_left = feval_linear(model_left, X[left], y[~mask],
-                                  weights=weights[~mask], **largs_left)
-                wloss_left = loss_left * (weights[~mask].sum() / weights.sum())
+                loss_right = feval_linear(model_right, Z[right], y[right],
+                                   weights=weights[right], **largs_right)
+                wloss_right = loss_right * (weights[right].sum() / weights.sum())
 
-                loss_right = feval_linear(model_right, X[right], y[mask],
-                                   weights=weights[mask], **largs_right)
-                wloss_right = loss_right * (weights[mask].sum() / weights.sum())
+                response_gain = parent_loss - wloss_left - wloss_right
+
+                # derivative gain computation
+
+                beta_left = np.ravel(model_left.coef_)
+                beta_right = np.ravel(model_right.coef_)
+
+                derivative_gain = 0.0
+
+                for alpha, D in derivative_basis.items():
+                    left_gap = D[left] @ (beta_left - beta_parent)
+                    right_gap = D[right] @ (beta_right - beta_parent)
+
+                    order = sum(alpha)
+                    multiplicity = factorial(order) / np.prod(factorial(alpha))
+
+                    derivative_gain += multiplicity * (weights[left] @ left_gap**2 + weights[right] @ right_gap**2) / weights.sum()
 
             score = response_gain + derivative_gain
 
@@ -241,7 +258,9 @@ class _LinearTree(BaseEstimator):
                  min_samples_split, min_samples_leaf, max_bins,
                  min_impurity_decrease, categorical_features,
                  split_features, linear_features, n_jobs,
-                 local_degree: int = 3, derivative_degree: int = 2
+                 local_degree: int = 3, derivative_degree: int = 2,
+                 max_features="sqrt",
+                 random_state=None,
     ):
 
         self.base_estimator = base_estimator
@@ -258,6 +277,8 @@ class _LinearTree(BaseEstimator):
 
         self.local_degree = local_degree
         self.derivative_degree = derivative_degree
+        self.max_features = max_features
+        self.random_state = random_state
 
     def _parallel_args(self):
         return {}
@@ -301,6 +322,14 @@ class _LinearTree(BaseEstimator):
         -------
         self : object
         """
+        node_features = np.sort(
+            self._rng.choice(
+                self._split_features,
+                size=self._max_features,
+                replace=False,
+            )
+        )
+
         probabilities = np.linspace(0, 1, self.max_bins)[1:-1]
 
         bins = {
@@ -586,6 +615,20 @@ class _LinearTree(BaseEstimator):
         else:
             split_features = np.arange(n_feat)
         self._split_features = split_features
+
+        n_features = len(self._split_features)
+
+        if self.max_features is None:
+            self._max_features = n_features
+        elif self.max_features == "sqrt":
+            self._max_features = max(1, int(np.sqrt(n_features)))
+        elif isinstance(self.max_features, float):
+            self._max_features = max(
+                1,
+                int(np.ceil(self.max_features * n_features)),
+            )
+        else:
+            self._max_features = min(self.max_features, n_features)
 
         if self.linear_features is not None:
             linear_features = np.unique(self.linear_features)
