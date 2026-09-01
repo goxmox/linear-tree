@@ -147,17 +147,24 @@ def _parallel_binning_fit(split_feat, _self,
                 beta_right = np.ravel(model_right.coef_)
 
                 derivative_gain = 0.0
+                child_derivative_loss = 0.0
+                parent_derivative_loss = 0.0
 
                 for alpha, D in derivative_basis.items():
                     #left_gap = D[left] @ (beta_left - beta_parent)
                     #right_gap = D[right] @ (beta_right - beta_parent)
                     left_gap = D[left] @ beta_left - deriv[alpha][left]
                     right_gap = D[right] @ beta_right - deriv[alpha][right]
+                    parent_gap = D @ beta_parent - deriv[alpha]
 
                     order = sum(alpha)
                     multiplicity = _self.derivative_weights[order - 1] * factorial(order) / np.prod(factorial(alpha))
 
-                    derivative_gain += multiplicity * (left_gap @ left_gap + right_gap @ right_gap) / X.shape[0]
+                    child_derivative_loss += multiplicity * (left_gap @ left_gap + right_gap @ right_gap) / X.shape[0]
+                    parent_derivative_loss += multiplicity * np.mean(parent_gap ** 2)
+
+                derivative_gain = parent_derivative_loss - child_derivative_loss
+
             else:
                 if support_sample_weight:
                     model_left.fit(Z[left], y[left],
@@ -197,7 +204,7 @@ def _parallel_binning_fit(split_feat, _self,
                     derivative_gain += multiplicity * (weights[left] @ left_gap**2 + weights[right] @ right_gap**2) / weights.sum()
 
             score = response_gain + derivative_gain
-            # print(derivative_gain / score)
+            print(derivative_gain / score)
 
             # store if best
             if score > best_gain:
