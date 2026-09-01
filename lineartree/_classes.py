@@ -204,7 +204,7 @@ def _parallel_binning_fit(split_feat, _self,
                     derivative_gain += multiplicity * (weights[left] @ left_gap**2 + weights[right] @ right_gap**2) / weights.sum()
 
             score = response_gain + derivative_gain
-            print(derivative_gain / score)
+            #print(derivative_gain / score)
 
             # store if best
             if score > best_gain:
