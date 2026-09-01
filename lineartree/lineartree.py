@@ -6,6 +6,9 @@ from sklearn.utils.validation import check_is_fitted, _check_sample_weight
 from ._classes import _predict_branch
 from ._classes import _LinearTree, _LinearBoosting, _LinearForest
 
+from scipy.special import factorial
+from sklearn.preprocessing import PolynomialFeatures
+
 
 class LinearTreeRegressor(_LinearTree, RegressorMixin):
     """A Linear Tree Regressor.
@@ -59,7 +62,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
         ``max_bins`` bins. Must be lower than 120 and larger than 10.
         A higher value implies a higher training time.
 
-    min_impurity_decrease : float, default=0.0
+    min_score_gain : float, default=0.0
         A node will be split if this split induces a decrease of the impurity
         greater than or equal to this value.
 
@@ -123,8 +126,10 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
     """
     def __init__(self, base_estimator, *, criterion='mse', max_depth=5,
                  min_samples_split=6, min_samples_leaf=0.1, max_bins=25,
-                 min_impurity_decrease=0.0, categorical_features=None,
-                 split_features=None, linear_features=None, n_jobs=None):
+                 min_score_gain=0.0, categorical_features=None,
+                 split_features=None, linear_features=None, n_jobs=None,
+                 local_degree: int = 3, derivative_degree: int = 2,
+    ):
 
         self.base_estimator = base_estimator
         self.criterion = criterion
@@ -132,11 +137,40 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
         self.min_samples_split = min_samples_split
         self.min_samples_leaf = min_samples_leaf
         self.max_bins = max_bins
-        self.min_impurity_decrease = min_impurity_decrease
+        self.min_score_gain = min_score_gain
         self.categorical_features = categorical_features
         self.split_features = split_features
         self.linear_features = linear_features
         self.n_jobs = n_jobs
+
+        self.local_degree = local_degree
+        self.derivative_degree = derivative_degree
+        self._polynomial = None
+
+    def _derivative_transform(self, X, alpha):
+        powers = self._polynomial.powers_
+        valid = np.all(powers >= alpha, axis=1)
+        remaining = powers[valid] - alpha
+
+        multiplier = np.prod(
+            factorial(powers[valid]) / factorial(remaining),
+            axis=1,
+        )
+
+        derivative = np.zeros(
+            (X.shape[0], powers.shape[0]),
+            dtype=float,
+        )
+
+        derivative[:, valid] = (
+                np.prod(
+                    X[:, None, :] ** remaining[None, :, :],
+                    axis=2,
+                )
+                * multiplier
+        )
+
+        return derivative
 
     def fit(self, X, y, sample_weight=None):
         """Build a Linear Tree of a linear estimator from the training
@@ -184,11 +218,30 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
         self.n_targets_ = y_shape[1] if len(y_shape) > 1 else 1
         if self.n_targets_ < 2:
             y = y.ravel()
-        self._fit(X, y, sample_weight)
+
+        self._polynomial = PolynomialFeatures(
+            degree=self.local_degree,
+            include_bias=False,
+        )
+
+        Z = self._polynomial.fit_transform(X)
+        powers = self._polynomial.powers_
+
+        max_order = min(self.derivative_degree, self.local_degree - 1,)
+
+        orders = powers.sum(axis=1)
+        alphas = powers[(orders >= 1) & (orders <= max_order)]
+
+        derivative_basis = {}
+
+        for alpha in alphas:
+            derivative_basis[tuple(alpha)] = self._derivative_transform(X, alpha)
+
+        self._fit(X, Z, derivative_basis, y, sample_weight)
 
         return self
 
-    def predict(self, X):
+    def predict(self, X, alpha=None):
         """Predict regression target for X.
 
         Parameters
@@ -212,23 +265,40 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
             force_all_finite=True,
             ensure_2d=True,
             allow_nd=False,
-            ensure_min_features=self.n_features_in_
+            ensure_min_features=self.n_features_in_,
+
         )
 
-        if self.n_targets_ > 1:
-            pred = np.zeros((X.shape[0], self.n_targets_))
+        if alpha is None:
+            alpha = (0,) * self.n_features_in_
+
+        order = sum(alpha)
+
+        if order > self.derivative_degree:
+            raise ValueError(
+                f"Derivative order {order} exceeds the fitted maximum "
+                f"{self.derivative_degree}."
+            )
+
+        if order == 0:
+            design = self._polynomial.transform(X)
         else:
-            pred = np.zeros(X.shape[0])
+            design = self._derivative_transform(X, np.asarray(alpha))
 
-        for L in self._leaves.values():
+        prediction = np.zeros(X.shape[0])
 
-            mask = _predict_branch(X, L.threshold)
-            if (~mask).all():
+        for leaf in self._leaves.values():
+            mask = _predict_branch(X, leaf.threshold)
+
+            if not mask.any():
                 continue
 
-            pred[mask] = L.model.predict(X[np.ix_(mask, self._linear_features)])
+            if order == 0:
+                prediction[mask] = leaf.model.predict(design[mask])
+            else:
+                prediction[mask] = design[mask] @ np.ravel(leaf.model.coef_)
 
-        return pred
+        return prediction
 
 
 class LinearTreeClassifier(_LinearTree, ClassifierMixin):
