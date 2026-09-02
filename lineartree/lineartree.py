@@ -1,4 +1,4 @@
-from typing import Iterable
+from typing import Iterable, List
 
 import numpy as np
 
@@ -133,7 +133,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
                  min_score_gain=0.0, categorical_features=None,
                  split_features=None, linear_features=None, n_jobs=None,
                  local_degree: int = 3, derivative_degree: int = 2,
-                 derivative_weight: float = 1.0,
+                 derivative_weights: List[float] = [0.0, 1e-5],
                  max_features="sqrt",
                  random_state=None,
     ):
@@ -155,7 +155,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
         self._polynomial = None
         self.max_features = max_features
         self.random_state = random_state
-        self.derivative_weight = derivative_weight
+        self.derivative_weights = derivative_weights
 
     def _derivative_transform(self, X, alpha):
         powers = self._polynomial.powers_

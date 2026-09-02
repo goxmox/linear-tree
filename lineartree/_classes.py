@@ -1,5 +1,5 @@
 import numbers
-from typing import Iterable
+from typing import Iterable, List
 
 import numpy as np
 import scipy.sparse as sp
@@ -153,10 +153,9 @@ def _parallel_binning_fit(split_feat, _self,
                     right_gap = D[right] @ (beta_right - beta_parent)
 
                     order = sum(alpha)
-                    multiplicity = factorial(order) / np.prod(factorial(alpha))
+                    multiplicity = _self.derivative_weights[order - 1] * factorial(order) / np.prod(factorial(alpha))
 
                     derivative_gain += multiplicity * (left_gap @ left_gap + right_gap @ right_gap) / X.shape[0]
-                    derivative_weight /= X.shape[0]
             else:
                 if support_sample_weight:
                     model_left.fit(Z[left], y[left],
@@ -195,9 +194,7 @@ def _parallel_binning_fit(split_feat, _self,
 
                     derivative_gain += multiplicity * (weights[left] @ left_gap**2 + weights[right] @ right_gap**2) / weights.sum()
 
-                derivative_weight /= weights.sum()
-
-            score = response_gain + derivative_weight * derivative_gain
+            score = response_gain + derivative_gain
             #print(derivative_weight * derivative_gain / score)
 
             # store if best
@@ -265,7 +262,7 @@ class _LinearTree(BaseEstimator):
                  local_degree: int = 3, derivative_degree: int = 2,
                  max_features="sqrt",
                  random_state=None,
-                 derivative_weight: float = 1.0,
+                 derivative_weights: List[float] = [0.0, 1e-5],
     ):
 
         self.base_estimator = base_estimator
@@ -284,7 +281,7 @@ class _LinearTree(BaseEstimator):
         self.derivative_degree = derivative_degree
         self.max_features = max_features
         self.random_state = random_state
-        self.derivative_weight = derivative_weight
+        self.derivative_weights = derivative_weights
 
     def _parallel_args(self):
         return {}
@@ -354,7 +351,7 @@ class _LinearTree(BaseEstimator):
                 self, X, Z, derivative_basis, y,
                 weights, support_sample_weight,
                 [bins[i] for i in feat],
-                loss, beta_parent, self.derivative_weight,
+                loss, beta_parent, self.derivative_weights,
             )
             for feat in split_feat)
 
