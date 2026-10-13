@@ -216,7 +216,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
             X, y,
             reset=True,
             accept_sparse=False,
-            dtype='float32',
+            dtype='float64',
             force_all_finite=True,
             ensure_2d=True,
             allow_nd=False,
@@ -236,20 +236,23 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
             include_bias=False,
         )
 
-        Z = self._polynomial.fit_transform(X)
-        powers = self._polynomial.powers_
+        # Z = self._polynomial.fit_transform(X)
+        # powers = self._polynomial.powers_
+        #
+        # max_order = min(self.derivative_degree, self.local_degree - 1,)
+        #
+        # orders = powers.sum(axis=1)
+        # alphas = powers[(orders >= 1) & (orders <= max_order)]
+        #
+        # derivative_basis = {}
+        #
+        # for alpha in alphas:
+        #     derivative_basis[tuple(alpha)] = self._derivative_transform(X, alpha)
+        #
+        # self._fit(X, Z, derivative_basis, y, sample_weight)
 
-        max_order = min(self.derivative_degree, self.local_degree - 1,)
-
-        orders = powers.sum(axis=1)
-        alphas = powers[(orders >= 1) & (orders <= max_order)]
-
-        derivative_basis = {}
-
-        for alpha in alphas:
-            derivative_basis[tuple(alpha)] = self._derivative_transform(X, alpha)
-
-        self._fit(X, Z, derivative_basis, y, sample_weight)
+        self._polynomial.fit(X)
+        self._fit(X, None, {}, y, sample_weight)
 
         return self
 
@@ -273,7 +276,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
             X,
             reset=False,
             accept_sparse=False,
-            dtype='float32',
+            dtype='float64',
             force_all_finite=True,
             ensure_2d=True,
             allow_nd=False,
@@ -297,18 +300,23 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
         else:
             design = self._derivative_transform(X, np.asarray(alpha))
 
-        prediction = np.zeros(X.shape[0])
+        prediction = np.zeros(len(X))
 
         for leaf in self._leaves.values():
             mask = _predict_branch(X, leaf.threshold)
-
             if not mask.any():
                 continue
 
+            centered = X[mask] - leaf.bounds.mean(axis=0)
+
             if order == 0:
-                prediction[mask] = leaf.model.predict(design[mask])
+                design = self._polynomial.transform(centered)
+                prediction[mask] = leaf.model.predict(design)
             else:
-                prediction[mask] = design[mask] @ np.ravel(leaf.model.coef_)
+                design = self._derivative_transform(
+                    centered, np.asarray(alpha)
+                )
+                prediction[mask] = design @ np.ravel(leaf.model.coef_)
 
         return prediction
 

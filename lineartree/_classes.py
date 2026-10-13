@@ -82,7 +82,7 @@ def _partition_columns(columns, n_jobs):
 def _parallel_binning_fit(split_feat, _self,
                           X, Z, derivative_basis, y,
                           weights, support_sample_weight,
-                          bins, parent_loss, beta_parent, derivative_weight,):
+                          bins, parent_loss, beta_parent, derivative_weight, bounds,):
     """Private function to find the best column splittings within a job."""
     n_sample, n_feat = X.shape
     feval_linear = CRITERIA[_self.criterion]
@@ -128,76 +128,53 @@ def _parallel_binning_fit(split_feat, _self,
                 if len(largs_right['classes']) == 1:
                     model_right = DummyClassifier(strategy="most_frequent")
 
+            left_bounds = bounds.copy()
+            right_bounds = bounds.copy()
+            left_bounds[1, col] = q
+            right_bounds[0, col] = q
+
+            Z_left = _self._polynomial.transform(
+                X[left] - left_bounds.mean(axis=0)
+            )
+            Z_right = _self._polynomial.transform(
+                X[right] - right_bounds.mean(axis=0)
+            )
+
             if weights is None:
-                model_left.fit(Z[left], y[left])
-                loss_left = feval_linear(model_left, Z[left], y[left],
+                model_left.fit(Z_left, y[left])
+                loss_left = feval_linear(model_left, Z_left, y[left],
                                   **largs_left)
                 wloss_left = loss_left * (n_left / n_sample)
 
-                model_right.fit(Z[right], y[right])
-                loss_right = feval_linear(model_right, Z[right], y[right],
+                model_right.fit(Z_right, y[right])
+                loss_right = feval_linear(model_right, Z_right, y[right],
                                    **largs_right)
                 wloss_right = loss_right * (n_right / n_sample)
 
                 response_gain = parent_loss - wloss_left - wloss_right
-
-                # derivative gain computation
-
-                beta_left = np.ravel(model_left.coef_)
-                beta_right = np.ravel(model_right.coef_)
-
-                derivative_gain = 0.0
-
-                for alpha, D in derivative_basis.items():
-                    left_gap = D[left] @ (beta_left - beta_parent)
-                    right_gap = D[right] @ (beta_right - beta_parent)
-
-                    order = sum(alpha)
-                    multiplicity = _self.derivative_weights[order - 1] * factorial(order) / np.prod(factorial(alpha))
-
-                    derivative_gain += multiplicity * (
-                            left_gap @ left_gap +
-                            right_gap @ right_gap
-                    ) / X.shape[0]
             else:
                 if support_sample_weight:
-                    model_left.fit(Z[left], y[left],
+                    model_left.fit(Z_left, y[left],
                                    sample_weight=weights[left])
 
-                    model_right.fit(Z[right], y[right],
+                    model_right.fit(Z_right, y[right],
                                     sample_weight=weights[right])
 
                 else:
-                    model_left.fit(Z[left], y[left])
-                    model_right.fit(Z[right], y[right])
+                    model_left.fit(Z_left, y[left])
+                    model_right.fit(Z_right, y[right])
 
-                loss_left = feval_linear(model_left, Z[left], y[left],
+                loss_left = feval_linear(model_left, Z_left, y[left],
                                   weights=weights[left], **largs_left)
                 wloss_left = loss_left * (weights[left].sum() / weights.sum())
 
-                loss_right = feval_linear(model_right, Z[right], y[right],
+                loss_right = feval_linear(model_right, Z_right, y[right],
                                    weights=weights[right], **largs_right)
                 wloss_right = loss_right * (weights[right].sum() / weights.sum())
 
                 response_gain = parent_loss - wloss_left - wloss_right
 
-                # derivative gain computation
-
-                beta_left = np.ravel(model_left.coef_)
-                beta_right = np.ravel(model_right.coef_)
-
-                derivative_gain = 0.0
-
-                for alpha, D in derivative_basis.items():
-                    left_gap = D[left] @ (beta_left - beta_parent)
-                    right_gap = D[right] @ (beta_right - beta_parent)
-
-                    order = sum(alpha)
-                    multiplicity = factorial(order) / np.prod(factorial(alpha))
-
-                    derivative_gain += multiplicity * (weights[left] @ left_gap**2 + weights[right] @ right_gap**2) / weights.sum()
-
-            score = response_gain + derivative_gain
+            score = response_gain
             #print(derivative_weight * derivative_gain / score)
 
             # store if best
@@ -206,9 +183,9 @@ def _parallel_binning_fit(split_feat, _self,
                 split_col = col
                 best_gain = score
                 left_node = (model_left, loss_left, wloss_left,
-                             n_left, largs_left['classes'])
+                             n_left, largs_left['classes'], left_bounds)
                 right_node = (model_right, loss_right, wloss_right,
-                              n_right, largs_right['classes'])
+                              n_right, largs_right['classes'], right_bounds)
 
     return best_gain, split_t, split_col, left_node, right_node
 
@@ -240,7 +217,7 @@ class Node:
     def __init__(self, id=None, threshold=[],
                  parent=None, children=None,
                  n_samples=None, w_loss=None,
-                 loss=None, model=None, classes=None):
+                 loss=None, model=None, classes=None, bounds=None,):
         self.id = id
         self.threshold = threshold
         self.parent = parent
@@ -250,6 +227,7 @@ class Node:
         self.loss = loss
         self.model = model
         self.classes = classes
+        self.bounds = bounds
 
 
 class _LinearTree(BaseEstimator):
@@ -294,6 +272,7 @@ class _LinearTree(BaseEstimator):
                weights=None,
                loss=None,
                beta_parent=None,
+               bounds=None,
     ) -> Iterable:
         """Evaluate optimal splits in a given node (in a specific partition of
         X and y).
@@ -354,7 +333,7 @@ class _LinearTree(BaseEstimator):
                 self, X, Z, derivative_basis, y,
                 weights, support_sample_weight,
                 [bins[i] for i in feat],
-                loss, beta_parent, self.derivative_weights,
+                loss, beta_parent, self.derivative_weights, bounds
             )
             for feat in split_feat)
 
@@ -417,6 +396,9 @@ class _LinearTree(BaseEstimator):
         self._leaves = {}
 
         # initialize first fit
+        bounds = np.stack([np.zeros(self.n_features_in_), np.ones(self.n_features_in_)])
+        Z = self._polynomial.transform(X - bounds.mean(axis=0))
+
         largs = {'classes': None}
         model = deepcopy(self.base_estimator)
         if weights is None or not support_sample_weight:
@@ -436,7 +418,8 @@ class _LinearTree(BaseEstimator):
             n_samples=n_sample,
             model=model,
             loss=loss,
-            classes=largs['classes']
+            classes=largs['classes'],
+            bounds=bounds,
         )
 
         # in the beginning consider all the samples
@@ -446,18 +429,19 @@ class _LinearTree(BaseEstimator):
         i = 1
         while len(queue) > 0:
             masked_derivative_basis = {key: D[mask] for key, D in derivative_basis.items()}
+            bounds = self._nodes[queue[-1]].bounds
 
             if weights is None:
                 split_t, split_col, left_node, right_node = self._split(
                     X[mask], Z[mask], masked_derivative_basis, y[mask],
                     support_sample_weight,
-                    loss=loss, beta_parent=np.ravel(self._nodes[queue[-1]].model.coef_),
+                    loss=loss, beta_parent=np.ravel(self._nodes[queue[-1]].model.coef_), bounds=bounds,
                 )
             else:
                 split_t, split_col, left_node, right_node = self._split(
                     X[mask], Z[mask], masked_derivative_basis, y[mask],
                     support_sample_weight, weights[mask],
-                    loss=loss, beta_parent=np.ravel(self._nodes[queue[-1]].model.coef_),
+                    loss=loss, beta_parent=np.ravel(self._nodes[queue[-1]].model.coef_), bounds=bounds,
                 )
 
             # no utility in splitting
@@ -466,9 +450,9 @@ class _LinearTree(BaseEstimator):
                 del self._nodes[queue[-1]]
                 queue.pop()
             else:
-                model_left, loss_left, wloss_left, n_left, class_left = \
+                model_left, loss_left, wloss_left, n_left, class_left, left_bounds = \
                     left_node
-                model_right, loss_right, wloss_right, n_right, class_right = \
+                model_right, loss_right, wloss_right, n_right, class_right, right_bounds = \
                     right_node
                 self.feature_importances_[split_col] += \
                     loss - wloss_left - wloss_right
@@ -481,8 +465,10 @@ class _LinearTree(BaseEstimator):
                     n_samples=n_left,
                     threshold=self._nodes[queue[-1]].threshold[:] + [
                         (split_col, 'L', split_t)
-                    ]
+                    ],
+                    bounds=left_bounds,
                 )
+                #print(n_left, (model_left.coef_**2).sum()**(1/2))
 
                 self._nodes[queue[-1] + 'R'] = Node(
                     id=i + 1, parent=queue[-1],
@@ -492,8 +478,10 @@ class _LinearTree(BaseEstimator):
                     n_samples=n_right,
                     threshold=self._nodes[queue[-1]].threshold[:] + [
                         (split_col, 'R', split_t)
-                    ]
+                    ],
+                    bounds=right_bounds,
                 )
+                #print(n_right, (model_right.coef_ ** 2).sum() ** (1 / 2))
 
                 if hasattr(self, 'classes_'):
                     self._nodes[queue[-1] + 'L'].classes = class_left
