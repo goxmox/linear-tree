@@ -1748,3 +1748,4 @@ class SobolevForestRegressor(RegressorMixin, BaseEstimator):
         ]
 
         return np.mean(predictions, axis=0)
+
