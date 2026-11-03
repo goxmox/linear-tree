@@ -233,7 +233,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
 
         self._polynomial = PolynomialFeatures(
             degree=self.local_degree,
-            include_bias=False,
+            include_bias=not self.base_estimator.fit_intercept,
         )
 
         # Z = self._polynomial.fit_transform(X)
