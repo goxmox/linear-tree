@@ -133,7 +133,7 @@ class LinearTreeRegressor(_LinearTree, RegressorMixin):
                  min_score_gain=0.0, categorical_features=None,
                  split_features=None, linear_features=None, n_jobs=None,
                  local_degree: int = 3, derivative_degree: int = 2,
-                 derivative_weights: List[float] = [0.0, 1e-5],
+                 derivative_weights: List[float] = [0.0, 0.0],
                  max_features="sqrt",
                  random_state=None,
     ):
@@ -1742,10 +1742,11 @@ class SobolevForestRegressor(RegressorMixin, BaseEstimator):
         return self
 
     def predict(self, X, alpha=None):
-        predictions = [
-            tree.predict(X, alpha=alpha)
-            for tree in self.estimators_
-        ]
+        check_is_fitted(self, "estimators_")
 
-        return np.mean(predictions, axis=0)
+        prediction = self.estimators_[0].predict(X, alpha=alpha)
+        for tree in self.estimators_[1:]:
+            prediction += tree.predict(X, alpha=alpha)
 
+        prediction /= len(self.estimators_)
+        return prediction
